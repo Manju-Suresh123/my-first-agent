@@ -1,4 +1,5 @@
 import os
+import re
 import streamlit as st
 
 # Page configuration
@@ -20,12 +21,18 @@ api_key = setting("AI_API_KEY") or setting("OPENAI_API_KEY")
 base_url = setting("AI_BASE_URL")
 model = setting("AI_MODEL")
 
-# Auto-detect Google Gemini or custom gateway if key doesn't start with sk- and no base_url was set
-if api_key and not base_url:
-    if api_key.startswith("AIza") or api_key.startswith("AQ."):
+# Auto-detect or normalize Google Gemini endpoint
+if base_url:
+    if "generativelanguage.googleapis.com" in base_url.lower():
         base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-        if not model:
-            model = "gemini-2.5-flash"
+        if not model or model == "gpt-4o-mini":
+            model = "gemini-1.5-flash"
+    else:
+        base_url = re.sub(r"/openai/?$", "/openai/", base_url, flags=re.I)
+elif api_key and (api_key.startswith("AIza") or api_key.startswith("AQ.")):
+    base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    if not model or model == "gpt-4o-mini":
+        model = "gemini-1.5-flash"
 
 if not base_url:
     base_url = "https://api.openai.com/v1"
