@@ -1,5 +1,8 @@
+import json
 import os
 import re
+import urllib.error
+import urllib.request
 import streamlit as st
 
 # Page configuration
@@ -22,29 +25,38 @@ base_url = setting("AI_BASE_URL")
 model = setting("AI_MODEL")
 
 # Auto-detect or normalize Google Gemini endpoint
-if base_url:
-    if "generativelanguage.googleapis.com" in base_url.lower():
-        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-        if not model or model in ("gpt-4o-mini", "gemini-2.5-flash", "gemini-2.5"):
-            model = "gemini-1.5-flash"
-    else:
-        base_url = re.sub(r"/openai/?$", "/openai/", base_url, flags=re.I)
-elif api_key and (api_key.startswith("AIza") or api_key.startswith("AQ.")):
+is_google = (
+    "generativelanguage.googleapis.com" in base_url.lower()
+    or api_key.startswith("AIza")
+    or api_key.startswith("AQ.")
+)
+if is_google:
     base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-    if not model or model in ("gpt-4o-mini", "gemini-2.5-flash", "gemini-2.5"):
+    if not model or model in ("gpt-4o-mini", "gemini-2.5-flash", "gemini-2.5", "gemini-2.0-flash"):
         model = "gemini-1.5-flash"
-
-if not base_url:
+elif not base_url:
     base_url = "https://api.openai.com/v1"
-if not model:
-    model = "gpt-4o-mini"
 
-is_demo = not api_key or api_key.lower() in ("demo", "paste-your-key-here", "none")
+if not model:
+    model = "gemini-1.5-flash" if is_google else "gpt-4o-mini"
+
+# Choose default mode based on API key availability
+has_key = bool(api_key and api_key.lower() not in ("demo", "paste-your-key-here", "none", ""))
+
+mode = st.radio(
+    "Run Mode:",
+    ["Demo Mode (Free, Instant)", "Live AI Model"],
+    index=1 if has_key else 0,
+    horizontal=True,
+    help="Demo Mode works instantly with no key. Live AI Mode connects to your AI provider."
+)
+is_demo = mode.startswith("Demo")
 
 if is_demo:
-    st.info("ℹ️ **Demo Mode:** The app runs without an API key using built-in analyzer rules. Add an API key in Streamlit secrets anytime to use a live AI model.")
+    st.info("ℹ️ **Demo Mode:** Using built-in analyzer rules without needing an API key. Fast, reliable, and free.")
 else:
-    st.success(f"✅ **Live AI Mode:** Connected using model `{model}`.")
+    provider = "Google Gemini" if is_google else "OpenAI"
+    st.success(f"✅ **Live AI Mode:** Connecting to {provider} (`{model}`).")
 
 # Synthetic banking sample stored procedure
 SAMPLE_PLSQL = """CREATE OR REPLACE PROCEDURE sp_calculate_late_penalty (
@@ -262,6 +274,21 @@ class ModernizedServiceTest {{
 *(Report generated in Demo Mode. Add an API key in Streamlit secrets for a custom live LLM analysis)*"""
 
 
+def call_gemini_direct(key: str, model_name: str, prompt: str) -> str:
+    """Call Google Gemini directly via Google REST API to bypass OpenAI compatibility quirks."""
+    clean_model = model_name
+    if clean_model.startswith("models/"):
+        clean_model = clean_model[len("models/"):]
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={key}"
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}]
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=45) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+
 # Split screen into two columns
 col_left, col_right = st.columns([1, 1])
 
@@ -290,10 +317,6 @@ with col_right:
             with st.spinner("Analyzing rules and generating modernization report (Demo Mode)..."):
                 st.session_state["report"] = generate_demo_report(plsql_input)
         else:
-            from openai import OpenAI
-
-            client = OpenAI(api_key=api_key, base_url=base_url or None)
-
             prompt = (
                 "Act as a Principal Java Architect specializing in Banking Modernization.\n"
                 "Analyze this legacy PL/SQL stored procedure and generate a complete Migration Report:\n\n"
@@ -313,17 +336,22 @@ with col_right:
                 "  4. Banker's rounding precision verification.\n"
             )
 
-            with st.spinner(f"Analyzing rules, generating Java 21 service, and drafting test cases with {model}..."):
+            with st.spinner(f"Analyzing rules with {model}..."):
                 try:
-                    response = client.chat.completions.create(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.2,
-                    )
-                    report_content = response.choices[0].message.content
-                    st.session_state["report"] = report_content
+                    if is_google:
+                        st.session_state["report"] = call_gemini_direct(api_key, model, prompt)
+                    else:
+                        from openai import OpenAI
+                        client = OpenAI(api_key=api_key, base_url=base_url or None)
+                        response = client.chat.completions.create(
+                            model=model,
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.2,
+                        )
+                        st.session_state["report"] = response.choices[0].message.content
                 except Exception as e:
-                    st.error(f"Error calling API ({base_url}): {e}")
+                    st.warning(f"⚠️ API call encountered an error: {e}. Switching to Demo Report so you can still see the result:")
+                    st.session_state["report"] = generate_demo_report(plsql_input)
 
     # Display report if available
     if "report" in st.session_state:
