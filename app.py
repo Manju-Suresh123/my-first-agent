@@ -7,24 +7,37 @@ st.title("🏦 PL/SQL-to-Java Migration Analyzer")
 st.caption("AI-Augmented Senior Tech Lead Utility: Deconstruct legacy procedures into Java 21 services.")
 
 
-def get_api_key():
-    """Read API key from Streamlit secrets first, then environment."""
+def setting(name: str, default: str = "") -> str:
+    """Read a setting from Streamlit secrets first, then from the environment."""
     try:
-        val = st.secrets.get("OPENAI_API_KEY") or st.secrets.get("AI_API_KEY")
-        if val:
-            return str(val).strip()
+        value = st.secrets.get(name, "")
     except Exception:
-        pass
-    return (os.getenv("OPENAI_API_KEY") or os.getenv("AI_API_KEY") or "").strip()
+        value = ""
+    return str(value or os.getenv(name, default)).strip()
 
 
-api_key = get_api_key()
+api_key = setting("AI_API_KEY") or setting("OPENAI_API_KEY")
+base_url = setting("AI_BASE_URL")
+model = setting("AI_MODEL")
+
+# Auto-detect Google Gemini or custom gateway if key doesn't start with sk- and no base_url was set
+if api_key and not base_url:
+    if api_key.startswith("AIza") or api_key.startswith("AQ."):
+        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        if not model:
+            model = "gemini-2.5-flash"
+
+if not base_url:
+    base_url = "https://api.openai.com/v1"
+if not model:
+    model = "gpt-4o-mini"
+
 is_demo = not api_key or api_key.lower() in ("demo", "paste-your-key-here", "none")
 
 if is_demo:
-    st.info("ℹ️ **Demo Mode:** The app runs without an API key using built-in analyzer rules. Add an OpenAI key in Streamlit secrets anytime to use a live AI model.")
+    st.info("ℹ️ **Demo Mode:** The app runs without an API key using built-in analyzer rules. Add an API key in Streamlit secrets anytime to use a live AI model.")
 else:
-    st.success("✅ **Live AI Mode:** Connected to OpenAI model (gpt-4o-mini).")
+    st.success(f"✅ **Live AI Mode:** Connected using model `{model}`.")
 
 # Synthetic banking sample stored procedure
 SAMPLE_PLSQL = """CREATE OR REPLACE PROCEDURE sp_calculate_late_penalty (
@@ -239,7 +252,7 @@ class ModernizedServiceTest {{
     }}
 }}
 ```
-*(Report generated in Demo Mode. Add an OpenAI key in Streamlit secrets for a custom live LLM analysis)*"""
+*(Report generated in Demo Mode. Add an API key in Streamlit secrets for a custom live LLM analysis)*"""
 
 
 # Split screen into two columns
@@ -272,7 +285,7 @@ with col_right:
         else:
             from openai import OpenAI
 
-            client = OpenAI(api_key=api_key)
+            client = OpenAI(api_key=api_key, base_url=base_url or None)
 
             prompt = (
                 "Act as a Principal Java Architect specializing in Banking Modernization.\n"
@@ -293,17 +306,17 @@ with col_right:
                 "  4. Banker's rounding precision verification.\n"
             )
 
-            with st.spinner("Analyzing rules, generating Java 21 service, and drafting test cases..."):
+            with st.spinner(f"Analyzing rules, generating Java 21 service, and drafting test cases with {model}..."):
                 try:
                     response = client.chat.completions.create(
-                        model="gpt-4o-mini",
+                        model=model,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.2,
                     )
                     report_content = response.choices[0].message.content
                     st.session_state["report"] = report_content
                 except Exception as e:
-                    st.error("Error calling API: " + str(e))
+                    st.error(f"Error calling API ({base_url}): {e}")
 
     # Display report if available
     if "report" in st.session_state:
