@@ -25,13 +25,13 @@ model = setting("AI_MODEL")
 if base_url:
     if "generativelanguage.googleapis.com" in base_url.lower():
         base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-        if not model or model == "gpt-4o-mini":
+        if not model or model in ("gpt-4o-mini", "gemini-2.5-flash", "gemini-2.5"):
             model = "gemini-1.5-flash"
     else:
         base_url = re.sub(r"/openai/?$", "/openai/", base_url, flags=re.I)
 elif api_key and (api_key.startswith("AIza") or api_key.startswith("AQ.")):
     base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-    if not model or model == "gpt-4o-mini":
+    if not model or model in ("gpt-4o-mini", "gemini-2.5-flash", "gemini-2.5"):
         model = "gemini-1.5-flash"
 
 if not base_url:
