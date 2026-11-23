@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import urllib.error
 import urllib.request
 import streamlit as st
@@ -15,48 +14,20 @@ def setting(name: str, default: str = "") -> str:
     """Read a setting from Streamlit secrets first, then from the environment."""
     try:
         value = st.secrets.get(name, "")
-    except Exception:
+    except Exception:  # no secrets file: perfectly normal in demo mode
         value = ""
     return str(value or os.getenv(name, default)).strip()
 
 
-api_key = setting("AI_API_KEY") or setting("OPENAI_API_KEY")
-base_url = setting("AI_BASE_URL")
-model = setting("AI_MODEL")
+API_KEY = setting("AI_API_KEY") or setting("OPENAI_API_KEY") or setting("GEMINI_API_KEY") or setting("GOOGLE_API_KEY")
+BASE_URL = setting("AI_BASE_URL", "https://api.openai.com/v1")
+MODEL = setting("AI_MODEL", "gpt-4o-mini")
 
-# Auto-detect or normalize Google Gemini endpoint
-is_google = (
-    "generativelanguage.googleapis.com" in base_url.lower()
-    or api_key.startswith("AIza")
-    or api_key.startswith("AQ.")
-)
-if is_google:
-    base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-    if not model or model in ("gpt-4o-mini", "gemini-2.5-flash", "gemini-2.5", "gemini-2.0-flash"):
-        model = "gemini-1.5-flash"
-elif not base_url:
-    base_url = "https://api.openai.com/v1"
-
-if not model:
-    model = "gemini-1.5-flash" if is_google else "gpt-4o-mini"
-
-# Choose default mode based on API key availability
-has_key = bool(api_key and api_key.lower() not in ("demo", "paste-your-key-here", "none", ""))
-
-mode = st.radio(
-    "Run Mode:",
-    ["Demo Mode (Free, Instant)", "Live AI Model"],
-    index=1 if has_key else 0,
-    horizontal=True,
-    help="Demo Mode works instantly with no key. Live AI Mode connects to your AI provider."
-)
-is_demo = mode.startswith("Demo")
-
-if is_demo:
-    st.info("ℹ️ **Demo Mode:** Using built-in analyzer rules without needing an API key. Fast, reliable, and free.")
+if API_KEY and API_KEY.lower() not in ("demo", "paste-your-key-here", "none", ""):
+    st.success(f"Using a real AI model ({MODEL}).")
 else:
-    provider = "Google Gemini" if is_google else "OpenAI"
-    st.success(f"✅ **Live AI Mode:** Connecting to {provider} (`{model}`).")
+    API_KEY = ""
+    st.info("Demo mode: no AI key added yet, so the agent uses simple rules. Add your key to use a real model (see the README).")
 
 # Synthetic banking sample stored procedure
 SAMPLE_PLSQL = """CREATE OR REPLACE PROCEDURE sp_calculate_late_penalty (
@@ -275,10 +246,12 @@ class ModernizedServiceTest {{
 
 
 def call_gemini_direct(key: str, model_name: str, prompt: str) -> str:
-    """Call Google Gemini directly via Google REST API to bypass OpenAI compatibility quirks."""
+    """Call Google Gemini directly via Google REST API."""
     clean_model = model_name
     if clean_model.startswith("models/"):
         clean_model = clean_model[len("models/"):]
+    if clean_model in ("gemini-2.5-flash", "gemini-2.5"):
+        clean_model = "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={key}"
     payload = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}]
@@ -313,8 +286,8 @@ with col_right:
     if analyze_btn:
         if not plsql_input.strip():
             st.warning("Please paste or load a PL/SQL procedure first.")
-        elif is_demo:
-            with st.spinner("Analyzing rules and generating modernization report (Demo Mode)..."):
+        elif not API_KEY:
+            with st.spinner("The agent is reading the procedure and drafting the report (demo mode)..."):
                 st.session_state["report"] = generate_demo_report(plsql_input)
         else:
             prompt = (
@@ -336,21 +309,22 @@ with col_right:
                 "  4. Banker's rounding precision verification.\n"
             )
 
-            with st.spinner(f"Analyzing rules with {model}..."):
+            with st.spinner(f"Analyzing rules with {MODEL}..."):
                 try:
-                    if is_google:
-                        st.session_state["report"] = call_gemini_direct(api_key, model, prompt)
+                    if API_KEY.startswith("AIza") or API_KEY.startswith("AQ.") or "generativelanguage.googleapis.com" in BASE_URL.lower():
+                        clean_model = "gemini-1.5-flash" if "gemini" not in MODEL else MODEL
+                        st.session_state["report"] = call_gemini_direct(API_KEY, clean_model, prompt)
                     else:
                         from openai import OpenAI
-                        client = OpenAI(api_key=api_key, base_url=base_url or None)
+                        client = OpenAI(api_key=API_KEY, base_url=BASE_URL or None)
                         response = client.chat.completions.create(
-                            model=model,
+                            model=MODEL,
                             messages=[{"role": "user", "content": prompt}],
                             temperature=0.2,
                         )
                         st.session_state["report"] = response.choices[0].message.content
                 except Exception as e:
-                    st.warning(f"⚠️ API call encountered an error: {e}. Switching to Demo Report so you can still see the result:")
+                    st.warning(f"⚠️ The AI model could not answer ({e}). Showing Demo Report:")
                     st.session_state["report"] = generate_demo_report(plsql_input)
 
     # Display report if available
